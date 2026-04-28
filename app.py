@@ -10,8 +10,8 @@ from PIL import Image
 # ─────────────────────────────────────────────────────────────
 # 두 명의 "감정가" 모델 (각자 다른 백본을 써서 의견이 갈리도록 구성)
 # ─────────────────────────────────────────────────────────────
-GUILLAUME_MODEL = "prithivMLmods/Deep-Fake-Detector-v2-Model"   # Apache 2.0
-VOLLARD_MODEL = "umm-maybe/AI-image-detector"                    # 공개 모델
+GUILLAUME_MODEL = "Ateeqq/ai-vs-human-image-detector"            # 12만 장 학습
+VOLLARD_MODEL = "umm-maybe/AI-image-detector"                    # ViT 기반
 
 print("Loading Paul Guillaume judge...")
 guillaume = pipeline("image-classification", model=GUILLAUME_MODEL)
@@ -23,19 +23,27 @@ vollard = pipeline("image-classification", model=VOLLARD_MODEL)
 # ─────────────────────────────────────────────────────────────
 # 결과 파싱: 각 모델마다 "진품"으로 간주할 라벨이 다름
 # ─────────────────────────────────────────────────────────────
-REAL_LABELS = {"realism", "real", "human", "human-made", "natural", "authentic"}
+REAL_LABELS = {
+    "realism", "real", "human", "hum", "human-made", "natural",
+    "authentic", "real_image", "not_ai", "not-ai",
+}
+AI_LABELS = {"ai", "ai-generated", "artificial", "fake", "deepfake", "deep-fake", "ai_image"}
 
 
 def real_score(predictions):
-    """모델 출력에서 '진품'에 해당하는 확률을 추출"""
+    """모델 출력에서 '진품(human/real)'에 해당하는 확률을 추출"""
+    # 1순위: 진품 라벨 직접 매칭
     for p in predictions:
-        if p["label"].lower() in REAL_LABELS:
+        label = p["label"].lower().strip()
+        if label in REAL_LABELS or any(k in label for k in ("human", "real", "natural", "authentic")):
             return float(p["score"])
-    # 라벨이 안 맞으면 가장 높은 점수의 라벨을 보고 fallback
-    top = predictions[0]
-    if any(k in top["label"].lower() for k in ("real", "human", "natural")):
-        return float(top["score"])
-    return 1.0 - float(top["score"])  # 가품 점수의 반대
+    # 2순위: AI/가품 라벨의 반대값 사용
+    for p in predictions:
+        label = p["label"].lower().strip()
+        if label in AI_LABELS or any(k in label for k in ("ai", "fake", "deep")):
+            return 1.0 - float(p["score"])
+    # 마지막 fallback
+    return 0.5
 
 
 # ─────────────────────────────────────────────────────────────
