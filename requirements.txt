@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 audioop-lts; python_version >= "3.13"
-gradio>=4.44.0
+gradio>=5.0.0
 transformers>=4.44.0
 torch>=2.0.0
 Pillow>=10.0.0
