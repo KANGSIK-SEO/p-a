@@ -8,10 +8,10 @@ from transformers import pipeline
 from PIL import Image
 
 # ─────────────────────────────────────────────────────────────
-# 두 명의 "감정가" 모델 (각자 다른 백본을 써서 의견이 갈리도록 구성)
+# 두 명의 "감정가" 모델
 # ─────────────────────────────────────────────────────────────
-GUILLAUME_MODEL = "Ateeqq/ai-vs-human-image-detector"            # 12만 장 학습
-VOLLARD_MODEL = "umm-maybe/AI-image-detector"                    # ViT 기반
+GUILLAUME_MODEL = "Ateeqq/ai-vs-human-image-detector"
+VOLLARD_MODEL = "umm-maybe/AI-image-detector"
 
 print("Loading Paul Guillaume judge...")
 guillaume = pipeline("image-classification", model=GUILLAUME_MODEL)
@@ -21,35 +21,30 @@ vollard = pipeline("image-classification", model=VOLLARD_MODEL)
 
 
 # ─────────────────────────────────────────────────────────────
-# 결과 파싱: 각 모델마다 "진품"으로 간주할 라벨이 다름
+# 결과 파싱
 # ─────────────────────────────────────────────────────────────
-REAL_LABELS = {
-    "realism", "real", "human", "hum", "human-made", "natural",
-    "authentic", "real_image", "not_ai", "not-ai",
-}
-AI_LABELS = {"ai", "ai-generated", "artificial", "fake", "deepfake", "deep-fake", "ai_image"}
+REAL_KEYS = ("human", "real", "natural", "authentic", "hum")
+AI_KEYS = ("ai", "fake", "deep", "artificial", "gen")
 
 
-def real_score(predictions):
-    """모델 출력에서 '진품(human/real)'에 해당하는 확률을 추출"""
-    # 1순위: 진품 라벨 직접 매칭
+def ai_score(predictions):
+    """AI/가품 확률 추출 (0~1)"""
     for p in predictions:
         label = p["label"].lower().strip()
-        if label in REAL_LABELS or any(k in label for k in ("human", "real", "natural", "authentic")):
+        if any(k in label for k in AI_KEYS):
             return float(p["score"])
-    # 2순위: AI/가품 라벨의 반대값 사용
     for p in predictions:
         label = p["label"].lower().strip()
-        if label in AI_LABELS or any(k in label for k in ("ai", "fake", "deep")):
+        if any(k in label for k in REAL_KEYS):
             return 1.0 - float(p["score"])
-    # 마지막 fallback
     return 0.5
 
 
 # ─────────────────────────────────────────────────────────────
-# 메인 판정 함수
+# 판정 로직: "강한 AI 확신"이 양쪽에 있을 때만 가품 판정
+# (그림은 일반적으로 'AI같다'로 살짝 기우는 경향이 있어 관대하게 처리)
 # ─────────────────────────────────────────────────────────────
-THRESHOLD = 0.5
+AI_THRESHOLD = 0.70  # 이 값 이상이어야 "확실한 AI"로 봄
 
 
 def appraise(image):
@@ -64,24 +59,38 @@ def appraise(image):
     g_pred = guillaume(image)
     v_pred = vollard(image)
 
-    g_real = real_score(g_pred)
-    v_real = real_score(v_pred)
+    g_ai = ai_score(g_pred)
+    v_ai = ai_score(v_pred)
+    g_real = 1.0 - g_ai
+    v_real = 1.0 - v_ai
 
-    g_pass = g_real >= THRESHOLD
-    v_pass = v_real >= THRESHOLD
+    # 두 감정가 모두 "확실한 AI"로 판정해야 가품
+    g_says_fake = g_ai >= AI_THRESHOLD
+    v_says_fake = v_ai >= AI_THRESHOLD
 
-    if g_pass and v_pass:
+    if not g_says_fake and not v_says_fake:
         verdict = "🎉 **와우!** 폴 기욤과 앙브루아즈 볼라르 모두 진품 판정을 내렸습니다."
+    elif g_says_fake and v_says_fake:
+        verdict = "⚠️ **가품 의심이니 고려해보세요.** (두 감정가 모두 AI 생성 의심)"
     else:
-        verdict = "⚠️ **가품 의심이니 고려해보세요.**"
+        verdict = "🤔 **의견이 갈립니다.** 한 명만 가품을 의심하므로 추가 검토를 권합니다."
+
+    g_status = "✅ 진품 판정" if not g_says_fake else "❌ 가품 의심"
+    v_status = "✅ 진품 판정" if not v_says_fake else "❌ 가품 의심"
 
     g_detail = (
-        f"**🎩 폴 기욤 판정**: {'✅ 진품' if g_pass else '❌ 가품 의심'}  \n"
-        f"진품 확률 `{g_real:.1%}`"
+        f"### 🎩 폴 기욤\n"
+        f"- 판정: **{g_status}**\n"
+        f"- 진품 확률: `{g_real:.1%}`\n"
+        f"- AI 의심도: `{g_ai:.1%}`\n"
+        f"- 원본 출력: `{[(p['label'], round(p['score'], 3)) for p in g_pred]}`"
     )
     v_detail = (
-        f"**🎨 앙브루아즈 볼라르 판정**: {'✅ 진품' if v_pass else '❌ 가품 의심'}  \n"
-        f"진품 확률 `{v_real:.1%}`"
+        f"### 🎨 앙브루아즈 볼라르\n"
+        f"- 판정: **{v_status}**\n"
+        f"- 진품 확률: `{v_real:.1%}`\n"
+        f"- AI 의심도: `{v_ai:.1%}`\n"
+        f"- 원본 출력: `{[(p['label'], round(p['score'], 3)) for p in v_pred]}`"
     )
 
     return verdict, g_detail, v_detail
@@ -95,12 +104,14 @@ DESCRIPTION = """
 
 > 두 명의 가상 미술 감정가가 사진을 보고 진위를 판정합니다.
 
-**사용법** : 의심 가는 미술품 사진을 업로드하세요. 두 감정가가 동시에 판정합니다.
+**사용법** : 의심 가는 미술품 사진을 업로드하세요.
 
 - ✅ 둘 다 진품 → 와우!
-- ⚠️ 한 명이라도 가품 의심 → 고려해보세요
+- ⚠️ 둘 다 가품 의심 (AI 의심도 70% 이상) → 가품 의심
+- 🤔 한 명만 의심 → 의견 분분 (추가 검토 권장)
 
-> ⚠️ *본 서비스는 참고용 사전 판정 도구이며, 실제 감정은 전문 기관에 의뢰하세요.*
+> ⚠️ *본 서비스는 AI 생성 위작 1차 필터링용 참고 도구입니다.
+> 정식 감정은 전문 기관에 의뢰하세요.*
 """
 
 with gr.Blocks(title="P-A : 미술품 진위 판정", theme=gr.themes.Soft()) as demo:
